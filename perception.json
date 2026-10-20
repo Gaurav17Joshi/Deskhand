@@ -1,0 +1,11 @@
+{
+  "model_l0": "round-l0-20260906-190904",
+  "endpoint_l0": "http://127.0.0.1:8100",
+  "model": "round-l1-20260907-010157",
+  "endpoint": "http://127.0.0.1:8100",
+  "ocr_endpoint": "http://127.0.0.1:8300",
+  "ocr_token": "cua-local",
+  "icons_endpoint": "http://127.0.0.1:8400",
+  "icons_token": "cua-local",
+  "icons_apps": "auto"
+}

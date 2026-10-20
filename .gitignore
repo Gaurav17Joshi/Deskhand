@@ -1,0 +1,12 @@
+# Models and third-party code are fetched separately (see README), never committed.
+weights/
+icon-library/
+models-ocr/
+repos/
+
+# Local state
+.venv/
+runs/
+.env
+__pycache__/
+*.pyc
