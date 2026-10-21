@@ -27,6 +27,7 @@ import json
 import os
 import re
 import sys
+import threading
 import time
 from ctypes import wintypes
 
@@ -105,6 +106,9 @@ _u32.IsWindowVisible.argtypes = [wintypes.HWND]
 _u32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
 _u32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
 _u32.SetForegroundWindow.argtypes = [wintypes.HWND]
+_u32.IsIconic.argtypes = [wintypes.HWND]
+_u32.GetWindow.argtypes = [wintypes.HWND, wintypes.UINT]
+_u32.GetWindow.restype = wintypes.HWND
 _u32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
 _u32.GetCursorPos.argtypes = [ctypes.POINTER(wintypes.POINT)]
 _k32.OpenProcess.restype = wintypes.HANDLE
@@ -134,7 +138,26 @@ def _owner(hwnd):
 
 
 def owner_at(x, y):
-    return _owner(_u32.WindowFromPoint(wintypes.POINT(int(x), int(y))))
+    """The process owning the window at a screen point. Our own windows (the
+    panel's frame and pointer, which clicks pass through) are skipped: what
+    counts is the window the click would actually reach."""
+    hwnd = _u32.WindowFromPoint(wintypes.POINT(int(x), int(y)))
+    got = _owner(hwnd)
+    if got[0] != os.getpid():
+        return got
+    h = _u32.GetAncestor(hwnd, 2)
+    while True:
+        h = _u32.GetWindow(h, 2)                               # GW_HWNDNEXT
+        if not h:
+            return 0, ""
+        if not _u32.IsWindowVisible(h):
+            continue
+        r = wintypes.RECT()
+        _u32.GetWindowRect(h, ctypes.byref(r))
+        if r.left <= x < r.right and r.top <= y < r.bottom:
+            o = _owner(h)
+            if o[0] != os.getpid():
+                return o
 
 
 def owner_focused():
@@ -213,8 +236,16 @@ class Guard:
     `pid`, of one process: other sessions on this machine run their own
     Blender, and those windows are someone else's work."""
 
-    def __init__(self, act, app, pid=None):
+    def __init__(self, act, app, pid=None, hook=None):
         self.act, self.app, self.pid, self.io = act, app.lower(), pid, act.io
+        # hook(kind, points) runs before any input is sent and returns a
+        # callable to run after it. The panel uses it to stop or hold the
+        # agent, draw its pointer and step out of the way of a click.
+        self.hook = hook
+
+    def _before(self, kind, *pts):
+        after = self.hook(kind, pts) if self.hook else None
+        return after or (lambda: None)
 
     def _ok(self, got):
         pid, exe = got
@@ -244,35 +275,63 @@ class Guard:
                           f"{got[1] or 'no window'} (pid {got[0]}), not "
                           f"{self._name()}. Click inside it first." + self.COVERED)
 
+    # The hook runs first in each method: it may hide something of ours that
+    # sits over the point, which the window check below would otherwise see.
+
     def click(self, x, y, **kw):
-        self._at(x, y)
-        return self.act.click(x, y, **kw)
+        after = self._before("click", (x, y))
+        try:
+            self._at(x, y)
+            return self.act.click(x, y, **kw)
+        finally:
+            after()
 
     def drag(self, from_xy, to_xy, **kw):
-        self._at(*from_xy)
-        self._at(*to_xy)
-        return self.act.drag(from_xy, to_xy, **kw)
+        after = self._before("drag", tuple(from_xy), tuple(to_xy))
+        try:
+            self._at(*from_xy)
+            self._at(*to_xy)
+            return self.act.drag(from_xy, to_xy, **kw)
+        finally:
+            after()
 
     def scroll(self, direction, amount=3, x=None, y=None, **kw):
-        if x is not None and y is not None:
-            self._at(x, y)
-        else:
+        if x is None or y is None:
             pt = wintypes.POINT()
             _u32.GetCursorPos(ctypes.byref(pt))
-            self._at(pt.x, pt.y)
-        return self.act.scroll(direction, amount, x, y, **kw)
+            px, py = pt.x, pt.y
+        else:
+            px, py = x, y
+        after = self._before("scroll", (px, py))
+        try:
+            self._at(px, py)
+            return self.act.scroll(direction, amount, x, y, **kw)
+        finally:
+            after()
 
     def key(self, keys, **kw):
-        self._keys()
-        return self.act.key(keys, **kw)
+        after = self._before("key")
+        try:
+            self._keys()
+            return self.act.key(keys, **kw)
+        finally:
+            after()
 
     def type_text(self, text, **kw):
-        self._keys()
-        return self.act.type_text(text, **kw)
+        after = self._before("type")
+        try:
+            self._keys()
+            return self.act.type_text(text, **kw)
+        finally:
+            after()
 
     def move(self, x, y):
-        self._at(x, y)
-        self.io.move(x, y)
+        after = self._before("point", (x, y))
+        try:
+            self._at(x, y)
+            self.io.move(x, y)
+        finally:
+            after()
 
 
 # --------------------------------------------------------------- blender
@@ -302,8 +361,19 @@ def bring_forward(hwnd):
     """Maximise and foreground. Windows only hands the foreground to a process
     that just had input, so tap alt first (the documented workaround)."""
     _u32.ShowWindow(hwnd, 3)                               # SW_MAXIMIZE
-    _u32.keybd_event(0x12, 0, 0, 0)
-    _u32.keybd_event(0x12, 0, 2, 0)
+    return focus_window(hwnd)
+
+
+MAGIC = 0x9E0C0DE      # act_win32's tag on the agent's own input events
+
+
+def focus_window(hwnd):
+    """Foreground a window without resizing it. The alt tap carries MAGIC, so
+    the panel's watch on your input does not take it for you."""
+    if _u32.IsIconic(hwnd):
+        _u32.ShowWindow(hwnd, 9)                           # SW_RESTORE
+    _u32.keybd_event(0x12, 0, 0, MAGIC)
+    _u32.keybd_event(0x12, 0, 2, MAGIC)
     _u32.SetForegroundWindow(hwnd)
     time.sleep(0.5)
     return _u32.GetForegroundWindow() == hwnd
@@ -467,27 +537,112 @@ def _shot(path):
     grab().save(path)
 
 
+class Stopped(Exception):
+    """The person pressed Stop."""
+
+
+class Control:
+    """What a person at the panel can do to a running agent: stop it, or pause
+    it and let it go on. Shared by the panel's thread and the agent's."""
+
+    def __init__(self):
+        self.stop = threading.Event()
+        self._go = threading.Event()
+        self._go.set()
+        self.why = ""
+
+    def pause(self, why=""):
+        if self._go.is_set():
+            self.why = why
+            self._go.clear()
+
+    def resume(self):
+        self._go.set()
+
+    @property
+    def paused(self):
+        return not self._go.is_set()
+
+    def gate(self):
+        """Wait while paused; raise Stopped once stopped. True if it waited."""
+        waited = False
+        while not self._go.wait(0.2):
+            waited = True
+            if self.stop.is_set():
+                raise Stopped()
+        if self.stop.is_set():
+            raise Stopped()
+        return waited
+
+
+# Tools that send input. After a pause one of these is not carried out: it
+# was planned on a screen the person may since have changed.
+ACTIONS = {"click", "drag", "scroll", "type_text", "key", "point"}
+PAUSED_NOTE = ("not done: the person paused you and may have used the computer "
+               "meanwhile. Look again with screen() before acting.")
+STOPPED_NOTE = "not done: the person stopped the task."
+
+
 class Run:
-    def __init__(self, task, app, model, effort, max_steps, out=None, pid=None):
+    """One agent on one application. `go(task)` runs a task; calling it again
+    on the same Run continues the conversation, so a follow-up instruction
+    ("now make it red") knows what came before.
+
+    `ui`, when given, is the panel: `ui.event(kind, **data)` hears every step,
+    and `ui.before_input(kind, points)` runs before each input event and may
+    return a callable to run after it. `control` is how the panel stops or
+    pauses the agent. Without either, this is the plain command-line agent."""
+
+    def __init__(self, task, app, model, effort, max_steps, out=None, pid=None,
+                 ui=None, control=None, summary=None):
         _load_key()
         _more_keys()
         from mcp_server import serve_mcp as S
         from openai import OpenAI
         self.S = S
         self.task, self.app, self.model = task, app, model
-        self.effort, self.max_steps = effort, max_steps
+        self.effort, self.max_steps, self.out = effort, max_steps, out
+        self.ui, self.control, self.summary = ui, control, summary
         self.session = S.Session(actuator="win32")
-        self.session.act = Guard(self.session.act, app, pid)
+        self.session.act = Guard(self.session.act, app, pid, hook=self._hook)
         self.mcp = S.build(self.session)
         self.client = OpenAI()
-        stamp = time.strftime("%Y%m%d-%H%M%S")
-        self.dir = out or os.path.join(CUA, "runs", "agent", f"{stamp}-{_slug(task)}")
-        os.makedirs(self.dir, exist_ok=True)
-        self.steps = open(os.path.join(self.dir, "steps.jsonl"), "a", encoding="utf-8")
-        self.n_img = 0
-        self.ended = None
-        self.usage = {"input": 0, "output": 0, "cached": 0, "calls": 0}
         self.images_in_output = True       # flipped off if the API refuses them
+        self._tools = None
+        self.last_id = None                # the conversation, for follow-ups
+        self.carry = []                    # outputs owed to its last calls
+        # Messages the person sends while a task runs: each goes to the model
+        # with the next step, so a task can be steered without stopping it.
+        import queue as _queue
+        self.inbox = _queue.Queue()
+
+    # -- the panel --------------------------------------------------------
+
+    def _emit(self, kind, **data):
+        if self.ui is not None:
+            try:
+                self.ui.event(kind, **data)
+            except Exception:                            # noqa: BLE001
+                pass
+
+    def _hook(self, kind, pts):
+        """Before any input: hold while paused, refuse once stopped, then let
+        the panel draw the pointer and get out of the way."""
+        c = self.control
+        if c is not None:
+            if c.stop.is_set():
+                raise Refused(STOPPED_NOTE)
+            try:
+                if c.gate():
+                    raise Refused(PAUSED_NOTE)
+            except Stopped:
+                raise Refused(STOPPED_NOTE)
+        if self.ui is not None:
+            return self.ui.before_input(kind, pts)
+        return None
+
+    def _stopped(self):
+        return self.control is not None and self.control.stop.is_set()
 
     # -- tools ----------------------------------------------------------
 
@@ -507,7 +662,9 @@ class Run:
                 self.ended = args
                 return [("text", "ended")]
             if name == "wait":
-                time.sleep(min(30.0, max(0.0, float(args.get("seconds", 1)))))
+                end = time.time() + min(30.0, max(0.0, float(args.get("seconds", 1))))
+                while time.time() < end and not self._stopped():
+                    time.sleep(0.2)
                 with s.lock:
                     return [("text", s.settle())]
             if name == "point":
@@ -560,10 +717,13 @@ class Run:
 
     def _create(self, input_, prev):
         name, notes = notes_for(self.app)
+        reasoning = {"effort": self.effort}
+        if self.summary:
+            reasoning["summary"] = self.summary
         kw = dict(model=self.model,
                   instructions=SYSTEM.format(app_name=name, app_notes=notes),
                   input=input_, tools=self._tools, parallel_tool_calls=False,
-                  reasoning={"effort": self.effort})
+                  reasoning=reasoning)
         if prev:
             kw["previous_response_id"] = prev
         r = self.client.responses.create(**kw)
@@ -576,31 +736,86 @@ class Run:
         self.usage["calls"] += 1
         return r
 
+    def _report(self, resp):
+        """Say what the model thought and said in this response."""
+        for o in resp.output:
+            if o.type == "reasoning":
+                for s in getattr(o, "summary", None) or []:
+                    t = getattr(s, "text", "")
+                    if t.strip():
+                        self._log(kind="think", text=t)
+                        self._emit("think", text=t)
+        said = " ".join(c.text for o in resp.output if o.type == "message"
+                        for c in o.content if getattr(c, "type", "") == "output_text")
+        if said.strip():
+            self._log(kind="say", text=said)
+            self._emit("say", text=said)
+            print(f"[model] {said.strip()[:300]}")
+
     def _log(self, **rec):
         rec["t"] = round(time.time(), 2)
         self.steps.write(json.dumps(rec, ensure_ascii=False) + "\n")
         self.steps.flush()
 
-    async def go(self):
+    def _fallback(self, outputs, extra, prev, e):
+        """The API refused images inside a tool output: send them as a
+        message instead, now and from here on."""
+        print(f"(images in tool output refused: {str(e)[:160]}; "
+              f"sending them as a message instead)")
+        self.images_in_output = False
+        fixed, more = [], []
+        for o in outputs:
+            out = o["output"]
+            if isinstance(out, str):
+                fixed.append(o)
+                continue
+            txt = "\n".join(i["text"] for i in out if i["type"] == "input_text")
+            imgs = [i for i in out if i["type"] == "input_image"]
+            fixed.append({**o, "output": txt or "ok"})
+            if imgs:
+                more.append({"role": "user", "content": [
+                    {"type": "input_text", "text": "(the returned picture)"}] + imgs})
+        return self._create(fixed + more + extra, prev)
+
+    async def go(self, task=None):
+        task = task or self.task
+        self.task = task
         t0 = time.time()
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        self.dir = self.out or os.path.join(CUA, "runs", "agent", f"{stamp}-{_slug(task)}")
+        os.makedirs(self.dir, exist_ok=True)
+        self.steps = open(os.path.join(self.dir, "steps.jsonl"), "a", encoding="utf-8")
+        self.n_img, self.ended, stopped = 0, None, False
+        self.usage = {"input": 0, "output": 0, "cached": 0, "calls": 0}
         _shot(os.path.join(self.dir, "before.png"))
-        self._tools = await self.tool_specs()
+        if self._tools is None:
+            self._tools = await self.tool_specs()
         first = await self.call("screen", {"full": True})
         first_text = first[0][1]
-        self._log(kind="start", task=self.task, model=self.model,
-                  effort=self.effort, screen=first_text)
-        print(f"--- task: {self.task}\n--- run dir: {self.dir}\n{first_text}\n")
-        user = (f"Task: {self.task}\n\nThe screen right now, before anything is "
-                f"touched (screen()):\n\n{first_text}")
-        resp = self._create([{"role": "user", "content": user}], None)
+        follow = self.last_id is not None
+        self._log(kind="start", task=task, model=self.model, effort=self.effort,
+                  screen=first_text, follow_up=follow)
+        self._emit("start", task=task, dir=self.dir, screen=first_text)
+        print(f"--- task: {task}\n--- run dir: {self.dir}\n{first_text}\n")
+        if follow:
+            user = (f"New instruction from the person: {task}\n\nThe screen now "
+                    f"(screen()):\n\n{first_text}")
+            resp = self._create(self.carry + [{"role": "user", "content": user}],
+                                self.last_id)
+        else:
+            user = (f"Task: {task}\n\nThe screen right now, before anything is "
+                    f"touched (screen()):\n\n{first_text}")
+            resp = self._create([{"role": "user", "content": user}], None)
+        self.carry = []
+        answered = {}                    # call_id -> output, for `resp`
         nudges, step = 0, 0
         while step < self.max_steps and self.ended is None:
+            self._report(resp)
+            answered = {}
             calls = [o for o in resp.output if o.type == "function_call"]
-            said = " ".join(c.text for o in resp.output if o.type == "message"
-                            for c in o.content if getattr(c, "type", "") == "output_text")
-            if said.strip():
-                self._log(kind="say", text=said)
-                print(f"[model] {said.strip()[:300]}")
+            if self._stopped():
+                stopped = True
+                break
             if not calls:
                 nudges += 1
                 if nudges > 2:
@@ -611,31 +826,59 @@ class Run:
                 continue
             outputs, extra = [], []
             for c in calls:
+                if self._stopped():
+                    stopped = True
+                    o = {"type": "function_call_output", "call_id": c.call_id,
+                         "output": STOPPED_NOTE}
+                    outputs.append(o)
+                    answered[c.call_id] = o
+                    continue
                 step += 1
                 args = json.loads(c.arguments or "{}")
+                waited = False
+                if self.control is not None:
+                    try:
+                        waited = self.control.gate()
+                    except Stopped:
+                        stopped = True
                 t1 = time.time()
-                parts = await self.call(c.name, args)
+                if stopped:
+                    parts = [("text", STOPPED_NOTE)]
+                elif waited and c.name in ACTIONS:
+                    parts = [("text", PAUSED_NOTE)]
+                else:
+                    parts = await self.call(c.name, args)
                 dt = time.time() - t1
                 items, names = self._output(parts)
                 text = "\n".join(v for k, v in parts if k == "text")
                 self._log(kind="tool", step=step, name=c.name, args=args,
                           secs=round(dt, 2), reply=text, images=names)
+                self._emit("tool", step=step, name=c.name, args=args,
+                           secs=round(dt, 1), reply=text)
                 print(f"[{step:02d}] {c.name}({json.dumps(args)[:120]}) "
                       f"{dt:.1f}s -> {text.splitlines()[0][:110] if text else ''}"
                       f"{'  +' + ','.join(names) if names else ''}")
                 if self.images_in_output:
-                    outputs.append({"type": "function_call_output",
-                                    "call_id": c.call_id, "output": items})
+                    o = {"type": "function_call_output", "call_id": c.call_id,
+                         "output": items}
                 else:
-                    outputs.append({"type": "function_call_output",
-                                    "call_id": c.call_id, "output": text or "ok"})
+                    o = {"type": "function_call_output", "call_id": c.call_id,
+                         "output": text or "ok"}
                     imgs = [i for i in items if i["type"] == "input_image"]
                     if imgs:
                         extra.append({"role": "user", "content": [
                             {"type": "input_text",
                              "text": f"(the picture returned by {c.name})"}] + imgs})
-            if self.ended is not None:
+                outputs.append(o)
+                answered[c.call_id] = o
+            if self.ended is not None or stopped or self._stopped():
+                stopped = stopped or (self.ended is None and self._stopped())
                 break
+            while not self.inbox.empty():
+                m = self.inbox.get_nowait()
+                self._log(kind="person", text=m)
+                extra.append({"role": "user", "content":
+                              f"Message from the person while you work: {m}"})
             if step >= self.max_steps - 3:
                 extra.append({"role": "user", "content":
                               "You are nearly out of steps: end_task now."})
@@ -643,30 +886,30 @@ class Run:
                 resp = self._create(outputs + extra, resp.id)
             except Exception as e:                       # noqa: BLE001
                 if self.images_in_output and "image" in str(e).lower():
-                    print(f"(images in tool output refused: {str(e)[:160]}; "
-                          f"sending them as a message instead)")
-                    self.images_in_output = False
-                    fixed, more = [], []
-                    for o in outputs:
-                        txt = "\n".join(i["text"] for i in o["output"]
-                                        if i["type"] == "input_text")
-                        imgs = [i for i in o["output"] if i["type"] == "input_image"]
-                        fixed.append({**o, "output": txt or "ok"})
-                        if imgs:
-                            more.append({"role": "user", "content": [
-                                {"type": "input_text", "text": "(the returned picture)"}]
-                                + imgs})
-                    resp = self._create(fixed + more + extra, resp.id)
+                    resp = self._fallback(outputs, extra, resp.id, e)
                 else:
                     raise
+        # Remember the conversation, and answer every call of its last
+        # response: the API refuses to continue past an unanswered call.
+        self.last_id = resp.id
+        self.carry = [answered.get(o.call_id) or
+                      {"type": "function_call_output", "call_id": o.call_id,
+                       "output": "not done: the task ended first."}
+                      for o in resp.output if o.type == "function_call"]
         _shot(os.path.join(self.dir, "after.png"))
-        result = {"task": self.task, "model": self.model, "effort": self.effort,
-                  "ended": self.ended or {"status": "unfinished",
-                                          "reason": f"no end_task after {step} steps"},
-                  "steps": step, "seconds": round(time.time() - t0, 1),
-                  "usage": self.usage}
+        if stopped:
+            ended = {"status": "stopped", "reason": "stopped by the person"}
+        else:
+            ended = self.ended or {"status": "unfinished",
+                                   "reason": f"no end_task after {step} steps"}
+        result = {"task": task, "model": self.model, "effort": self.effort,
+                  "ended": ended, "steps": step,
+                  "seconds": round(time.time() - t0, 1), "usage": self.usage,
+                  "dir": self.dir}
         json.dump(result, open(os.path.join(self.dir, "result.json"), "w"), indent=1)
-        print(f"\n--- {result['ended']['status']}: {result['ended'].get('reason', '')}"
+        self.steps.close()
+        self._emit("end", result=result)
+        print(f"\n--- {ended['status']}: {ended.get('reason', '')}"
               f"\n--- {step} steps, {result['seconds']}s, tokens in/out "
               f"{self.usage['input']}/{self.usage['output']} "
               f"(cached {self.usage['cached']}), {self.usage['calls']} model calls")

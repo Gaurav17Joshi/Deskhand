@@ -67,6 +67,25 @@ Put `OPENAI_API_KEY=...` in `.env` (or set it in the environment).
 .venv\Scripts\python scripts\stack.py down
 ```
 
+### Floating panel
+
+Run `Deskhand.cmd`. It starts the perception servers and opens a small
+always-on-top panel: pick what the agent works in (a fresh Blender, a fresh
+Chrome, or a window you click), type a task, Send. You see its thinking and
+every step live, and can **Pause**, **Resume** or **Stop** it; follow-up
+instructions continue the same conversation.
+
+- **Two mice:** while the agent works, the real cursor is its own (orange
+  **agent** tag), and your mouse moves your own blue **you** pointer. Your clicks
+  reach only the panel, and your typing goes into its box. Sending while it
+  works steers the task. **Esc twice** pauses and hands the cursor back to you.
+- A **yellow frame** surrounds the screen while the agent holds control.
+- The panel, frame and pointer are hidden from screen capture, so the agent
+  never sees them. Use `--show-in-captures` to record a demo.
+
+Scripts can drive the panel on `127.0.0.1:8777` (`/state`, `/task`, `/stop`,
+`/pause`, `/resume`); `scripts/test_panel.py` tests it that way.
+
 Each run writes `runs/agent/<time>-<task>/`: every tool call (`steps.jsonl`),
 the pictures the model saw, before/after screenshots and `result.json`.
 
