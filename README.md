@@ -34,7 +34,9 @@ screenshot
 
 **Safety:** with `--launch`, the agent starts its own Blender or Chrome
 (Chrome with a throwaway profile), and input may only reach that process and
-its children. Clicks or keys aimed at any other window are refused.
+its children. `--launch calculator` and `--launch explorer` open one window
+of an app Windows itself hosts, and input may only reach that window and its
+own dialogs and menus. Clicks or keys aimed at any other window are refused.
 
 ## Setup (any Windows 10/11 PC)
 
@@ -72,28 +74,39 @@ Hugging Face), `repos/` (from GitHub), `.venv/`, `runs/` and `.env`.
 .venv\Scripts\python scripts\stack.py up       # start the perception servers
 .venv\Scripts\python scripts\cua_agent.py "Add a UV sphere to the scene." --launch blender --close
 .venv\Scripts\python scripts\cua_agent.py "Search Google Images for dog and save a brown dog to C:\tmp as dog" --launch chrome --close
+.venv\Scripts\python scripts\cua_agent.py "Work out 1234 x 5678." --launch calculator --close
 .venv\Scripts\python scripts\run_suite.py      # 8 Blender tasks, one fresh Blender each
+.venv\Scripts\python scripts\run_suite.py apps # Calculator, File Explorer, 4 web apps
 .venv\Scripts\python scripts\stack.py down
 ```
 
 ### Floating panel
 
 Run `Deskhand.cmd`. It starts the perception servers and opens a small
-always-on-top panel: pick what the agent works in (a fresh Blender, a fresh
-Chrome, or a window you click), type a task, Send. You see its thinking and
-every step live, and can **Pause**, **Resume** or **Stop** it; follow-up
-instructions continue the same conversation.
+always-on-top panel: pick what the agent works in (a fresh Blender, Chrome,
+Calculator or File Explorer, or a window you click), type a task, Send. You
+see its thinking and every step live, with the steps, time and cost so far,
+and can **Pause**, **Resume** or **Stop** it; follow-up instructions continue
+the same conversation.
 
+- **Move, resize, minimise:** drag the header to move the panel and its
+  corner to resize it. **Minimise** folds it into one row that still shows the
+  status and the current step, with Pause and Stop.
 - **Two mice:** while the agent works, the real cursor is its own (orange
   **agent** tag), and your mouse moves your own blue **you** pointer. Your clicks
   reach only the panel, and your typing goes into its box. Sending while it
   works steers the task. **Esc twice** pauses and hands the cursor back to you.
+- The agent's cursor **glides** to each target along a slight curve, slow at
+  both ends, instead of jumping there; a ring ripples out where it presses.
+  `CUA_GLIDE=0` turns the glide off.
 - A **yellow frame** surrounds the screen while the agent holds control.
 - The panel, frame and pointer are hidden from screen capture, so the agent
-  never sees them. Use `--show-in-captures` to record a demo.
+  never sees them. If the agent clicks where the panel is, the click passes
+  through it to the app while the panel fades. Use `--show-in-captures` to
+  record a demo.
 
 Scripts can drive the panel on `127.0.0.1:8777` (`/state`, `/task`, `/stop`,
-`/pause`, `/resume`); `scripts/test_panel.py` tests it that way.
+`/pause`, `/resume`, `/mini`); `scripts/test_panel.py` tests it that way.
 
 Each run writes `runs/agent/<time>-<task>/`: every tool call (`steps.jsonl`),
 the pictures the model saw, before/after screenshots and `result.json`.
@@ -103,6 +116,27 @@ a minimised or disconnected session has no screen to see or click.
 
 ## Results so far
 
-8/8 basic Blender tasks (each checked by eye) at about 85 s and 14 steps
-each, and one Chrome download task (49 steps, 7 min). Long tasks are still
-expensive, because every picture stays in the conversation.
+Every outcome below was checked by eye, not taken from the agent's word.
+
+- **Blender:** 8/8 basic tasks (add a sphere, move, rename, bevel, render
+  engine, view, end frame, delete) at about 85 s and 14 steps each.
+- **Other apps:** 6/6.
+
+| task | app | result | steps | time | cost |
+|---|---|---|---|---|---|
+| 1234 x 5678 | Calculator | 7,006,652 | 9 | 42 s | $0.019 |
+| New folder Deskhand_test | File Explorer | created | 10 | 49 s | $0.020 |
+| Year the Eiffel Tower was completed | Chrome, Wikipedia | 1889 | 20 | 124 s | $0.037 |
+| Fill in and submit a pizza order form | Chrome, httpbin.org | all fields echoed back | 26 | 122 s | $0.052 |
+| Rectangle with the text Deskhand | Chrome, Excalidraw | drawn | 22 | 112 s | $0.058 |
+| Driving distance San Diego to Los Angeles | Chrome, Google Maps | 121 miles via I-5 N | 20 | 158 s | $0.041 |
+
+- **Longer tasks:** saving a brown dog picture from Google Images (49 steps,
+  7 min, $0.13); a labelled two-shape diagram with an arrow in Excalidraw
+  (78 steps, 7.5 min, $0.39).
+
+**Cost.** Every run records its tokens and cost in `result.json`. The agent
+(`gpt-6-sol`, $2 / $0.20 cached / $10 per 1M tokens) is about 95% of it;
+perception's area names (`gpt-5.6-luna`) are the rest. Most of the input is
+cached, which makes runs 3-7x cheaper, but every picture stays in the
+conversation, so long tasks cost more per step.

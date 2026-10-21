@@ -1,6 +1,6 @@
 """Drive the floating panel through its control port and check what it does.
 
-    .venv\\Scripts\\python scripts\\test_panel.py pause|followup|stop|human
+    .venv\\Scripts\\python scripts\\test_panel.py pause|followup|stop|human|twomice|pauseclick|mini
 
 Needs the panel running (scripts/deskhand_ui.py, port 8777). Each test prints
 a timeline and PASS/FAIL lines. `human` sends a mouse move WITHOUT the
@@ -235,12 +235,15 @@ def test_twomice():
           any("while it works" in l for l in st["log"][-6:]) and st["entry"] == "")
 
     say("person: click the panel's Pause button")
-    person_click(*st["widgets"]["pause"])
+    w = st["widgets"]["pause"]
+    person_click(*w)
     st = wait_for(lambda s: s["status"] == "paused", 8, 0.5)
     check("the panel's Pause button worked while the agent drove", st["status"] == "paused")
-    check("pausing gave the real cursor back to you",
-          not st["router"]["driving"]
-          and abs(st["router"]["cursor"][0] - st["widgets"]["pause"][0]) < 3)
+    time.sleep(0.6)
+    st = api("/state")
+    c = st["router"]["cursor"]
+    check(f"pausing gave the real cursor back to you (at {tuple(c)}, Pause at {tuple(w)})",
+          not st["router"]["driving"] and abs(c[0] - w[0]) < 3 and abs(c[1] - w[1]) < 3)
     say(f"resume -> {api('/resume', {})}")
     time.sleep(3)
 
@@ -273,6 +276,34 @@ def test_pauseclick():
     finish(120)
 
 
+def test_mini():
+    """While the agent drives: the minimise button folds the panel into its
+    header row, the row's own Pause works, and restoring brings the panel back
+    at its size."""
+    task = "Work out 12345 x 678 by clicking the Calculator's buttons with the mouse."
+    say(f"task -> {api('/task', {'text': task, 'target': 'calculator'})}")
+    st = wait_for(lambda s: s["status"] == "working" and len(steps(s)) >= 2, 240, 1)
+    full = st["panel_rect"]
+    person_click(*st["widgets"]["minimise"])
+    st = wait_for(lambda s: s["mini"], 8, 0.5)
+    r = st["panel_rect"]
+    check("minimise folded the panel while the agent drove",
+          st["mini"] and r[3] - r[1] < 70 and abs(r[3] - full[3]) <= 2)
+    check("still working after folding", st["status"] == "working")
+    person_click(*st["widgets"]["mini_pause"])
+    st = wait_for(lambda s: s["status"] == "paused", 8, 0.5)
+    check("the folded row's Pause paused it", st["status"] == "paused")
+    person_click(*st["widgets"]["minimise"])
+    st = wait_for(lambda s: not s["mini"], 8, 0.5)
+    r = st["panel_rect"]
+    check("restore brought the panel back at its size",
+          not st["mini"] and r[3] - r[1] == full[3] - full[1])
+    say(f"resume -> {api('/resume', {})}")
+    st = finish()
+    check("task finished done", st["status"] == "done")
+
+
 if __name__ == "__main__":
     {"pause": test_pause, "followup": test_followup, "stop": test_stop,
-     "human": test_human, "twomice": test_twomice, "pauseclick": test_pauseclick}[sys.argv[1]]()
+     "human": test_human, "twomice": test_twomice, "pauseclick": test_pauseclick,
+     "mini": test_mini}[sys.argv[1]]()

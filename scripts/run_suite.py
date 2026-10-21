@@ -1,17 +1,18 @@
-"""Run a list of tasks, each in a fresh Blender, and tabulate the outcomes.
+"""Run a list of tasks, each in a fresh app, and tabulate the outcomes.
 
-    .venv\\Scripts\\python scripts\\run_suite.py [suite name] [--model M] [--only id,id]
+    .venv\\Scripts\\python scripts\\run_suite.py [blender-basic | apps] [--model M] [--only id,id]
 
-Every task gets its own `cua_agent.py --launch --close` run (a new Blender
-with factory settings, so tasks cannot leak into each other). The agent's own
-verdict is recorded, but it is a claim: the after.png of each run is what to
-check.
+Every task gets its own `cua_agent.py --launch <app> --close` run (a new
+Blender with factory settings, a new Chrome, Calculator or File Explorer
+window, so tasks cannot leak into each other). The agent's own verdict is
+recorded, but it is a claim: the after.png of each run is what to check.
 
 Sharing the machine: if DESKHAND_LOCK names a lock file, the suite only runs
 while that file exists, and rewrites it before each task so it never looks
 stale. Whoever else uses the desktop agrees to keep off while it is there.
 
-Writes runs/suites/<time>-<suite>.json and prints a table.
+Writes runs/suites/<time>-<suite>-<model>.json and prints a table with each
+task's cost and the totals.
 """
 import argparse
 import json
@@ -34,6 +35,24 @@ SUITES = {
         ("top", "Change the 3D viewport to the top orthographic view."),
         ("frames", "Set the scene's end frame to 120."),
         ("delete", "Delete the default cube."),
+    ],
+    # Not Blender: Windows' own apps (one window each) and web apps in the
+    # agent's private Chrome. (id, task, app to launch)
+    "apps": [
+        ("calc", "Use the Calculator to work out 1234 x 5678, and report the result.",
+         "calculator"),
+        ("folder", "In this folder, create a new folder named Deskhand_test.", "explorer"),
+        ("wiki", "On Wikipedia, find the year the Eiffel Tower was completed, and "
+                 "report it.", "chrome"),
+        ("form", "Open https://httpbin.org/forms/post and fill in the pizza order form: "
+                 "customer name Deskhand, telephone 555-0100, e-mail test@example.com, "
+                 "size Medium, toppings Bacon and Onion, preferred delivery time 19:30. "
+                 "Submit the order, and report what the page shows after submitting.",
+         "chrome"),
+        ("draw", "Open https://excalidraw.com and draw a rectangle with the text "
+                 "Deskhand inside it.", "chrome"),
+        ("maps", "On Google Maps, find the driving distance from San Diego to Los "
+                 "Angeles, and report it.", "chrome"),
     ],
 }
 
@@ -68,7 +87,8 @@ def main():
     out = os.path.join(out_dir, f"{time.strftime('%Y%m%d-%H%M%S')}-{a.suite}-{a.model}.json")
     os.makedirs(os.path.join(CUA, "runs", "agent"), exist_ok=True)
     rows = []
-    for tid, task in tasks:
+    for tid, task, *rest in tasks:
+        kind = rest[0] if rest else "blender"
         if LOCK and not os.path.exists(LOCK):
             print(f"desktop lock {LOCK} is gone - stopping the suite")
             break
@@ -81,7 +101,7 @@ def main():
         before = set(os.listdir(os.path.join(CUA, "runs", "agent")))
         t0 = time.time()
         p = subprocess.run([sys.executable, os.path.join(HERE, "cua_agent.py"), task,
-                            "--launch", "--close", "--model", a.model,
+                            "--launch", kind, "--close", "--model", a.model,
                             "--effort", a.effort, "--max-steps", str(a.max_steps)],
                            cwd=CUA, capture_output=True, text=True,
                            encoding="utf-8", errors="replace")
@@ -96,11 +116,21 @@ def main():
                "steps": res.get("steps"), "seconds": res.get("seconds",
                                                           round(time.time() - t0, 1)),
                "tokens_in": (res.get("usage") or {}).get("input"),
-               "tokens_out": (res.get("usage") or {}).get("output")}
+               "tokens_cached": (res.get("usage") or {}).get("cached"),
+               "tokens_out": (res.get("usage") or {}).get("output"),
+               "perception_usage": res.get("perception_usage"),
+               "cost_usd": res.get("cost_usd")}
         rows.append(row)
         json.dump(rows, open(out, "w"), indent=1)
+        c = (row["cost_usd"] or {}).get("total")
         print(f"{tid:8s} {row['status']:9s} {row['steps']!s:>3} steps "
-              f"{row['seconds']!s:>6}s  {str(row['reason'])[:110]}", flush=True)
+              f"{row['seconds']!s:>6}s  ${c if c is not None else 0:.3f}  "
+              f"{str(row['reason'])[:100]}", flush=True)
+    costs = [r["cost_usd"] for r in rows if r.get("cost_usd")]
+    if costs:
+        print(f"\ntotal ${sum(c['total'] for c in costs):.3f} "
+              f"(agent ${sum(c['agent'] or 0 for c in costs):.3f}, perception "
+              f"${sum(c['perception'] for c in costs):.3f}) over {len(costs)} tasks")
     print(f"\nwrote {out}")
 
 

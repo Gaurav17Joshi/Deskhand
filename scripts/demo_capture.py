@@ -35,7 +35,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("task")
     ap.add_argument("--target", default="blender")
-    ap.add_argument("--pause-after", type=int, default=12, help="frames before the pause")
+    ap.add_argument("--pause-after", type=int, default=12,
+                    help="frames before the pause (0: no pause)")
+    ap.add_argument("--every", type=float, default=1.5, help="seconds between frames")
+    ap.add_argument("--gif-width", type=int, default=960)
     a = ap.parse_args()
     out = os.path.join(CUA, "runs", "panel", "photos", time.strftime("%Y%m%d-%H%M%S"))
     os.makedirs(out, exist_ok=True)
@@ -55,7 +58,7 @@ def main():
         s = st["status"]
         if s in ("working", "paused", "starting"):
             shot(s)
-            if s == "working" and not paused_done and n >= a.pause_after:
+            if s == "working" and a.pause_after and not paused_done and n >= a.pause_after:
                 print("pause ->", api("/pause", {}), flush=True)
                 time.sleep(1.0)
                 shot("paused")
@@ -67,14 +70,15 @@ def main():
             time.sleep(1.0)
             shot(s)
             break
-        time.sleep(1.5)
+        time.sleep(a.every)
     st = api("/state")
     print("final:", st["status"], "|", (st["log"] or [""])[-2:], flush=True)
     from PIL import Image
-    imgs = [Image.open(p).convert("RGB").resize((960, 600)) for p in frames]
+    w = a.gif_width
+    imgs = [Image.open(p).convert("RGB").resize((w, w * 10 // 16)) for p in frames]
     gif = os.path.join(out, "panel_in_action.gif")
-    imgs[0].save(gif, save_all=True, append_images=imgs[1:], duration=700, loop=0,
-                 optimize=True)
+    imgs[0].save(gif, save_all=True, append_images=imgs[1:],
+                 duration=max(100, int(a.every * 1000 * 0.6)), loop=0, optimize=True)
     print(f"{len(frames)} frames + {gif}")
 
 
