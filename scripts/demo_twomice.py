@@ -14,7 +14,7 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 CUA = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
-sys.path.insert(0, os.path.join(CUA, "repos", "studio"))
+import cua_agent  # noqa: E402,F401  (puts studio and perception on the path)
 import test_panel as T  # noqa: E402
 from mcp_server.screen import grab  # noqa: E402
 

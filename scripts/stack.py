@@ -1,11 +1,12 @@
 """Start, check and stop the local perception servers.
 
 What StudioApprentice's GPU server runs as containers, run here as three
-processes on the local GPU, each on the port and HTTP contract the perception
-client expects (see ../perception.json):
+local processes, each on the port and HTTP contract the perception client
+expects (see ../perception.json). They use the GPU when torch can see one
+(NVIDIA, CUDA) and the CPU otherwise, which works but is several times slower.
 
     :8100  detect   L0 + L1 (scripts/serve_detect.py)
-    :8300  ocr      PP-OCR, StudioApprentice's server/ocr/ocr_app.py, models from rapidocr
+    :8300  ocr      PP-OCR, StudioApprentice's server/ocr/ocr_app.py
     :8400  icons    perception.serve_icons over ../icon-library
 
     .venv\\Scripts\\python scripts\\stack.py up        # start what is not running
@@ -35,8 +36,19 @@ def _rapidocr_models():
     return os.path.join(os.path.dirname(rapidocr_onnxruntime.__file__), "models")
 
 
+def _cuda():
+    try:
+        import torch
+        return torch.cuda.is_available()
+    except Exception:                                   # noqa: BLE001
+        return False
+
+
 def services():
     models = _rapidocr_models()
+    # Icons: one worker on GPU 0 when there is a GPU; unset, it matches in
+    # this process, on the CPU when there is none.
+    gpu = {"PERC_ICON_GPUS": "0", "PERC_ICON_PER_GPU": "1"} if _cuda() else {}
     return {
         "detect": {
             "port": 8100,
@@ -52,8 +64,8 @@ def services():
                     "OCR_MODEL_PATH": os.path.join(models, "ch_PP-OCRv4_rec_infer.onnx"),
                     "OCR_DET_MODEL_PATH": os.path.join(models, "ch_PP-OCRv4_det_infer.onnx"),
                     "OCR_CHARSET_PATH": "",
-                    # keeps the spaces between words that ch-v4 drops; not in
-                    # StudioApprentice's handoff, fetched from RapidOCR's model hub
+                    # keeps the spaces between words that ch-v4 drops;
+                    # fetched from RapidOCR's model hub
                     "OCR_EN_MODEL_PATH": os.path.join(CUA, "models-ocr",
                                                       "en_PP-OCRv3_rec_infer.onnx"),
                     "OCR_GPU_MEM_LIMIT_MB": "2048", "SERVE_GPU": "0"},
@@ -66,8 +78,7 @@ def services():
                     "--host", "127.0.0.1", "--port", "8400",
                     "--log-level", "warning"],
             "env": {"PERC_ICON_ROOT": os.path.join(CUA, "icon-library"),
-                    "PERC_ICON_TOKEN": TOKEN, "PERC_ICON_GPUS": "0",
-                    "PERC_ICON_PER_GPU": "1"},
+                    "PERC_ICON_TOKEN": TOKEN, **gpu},
             "cwd": PERC,
             "auth": True,
         },

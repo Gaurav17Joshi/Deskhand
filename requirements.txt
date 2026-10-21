@@ -1,8 +1,7 @@
-# Versions Deskhand was tested with (Windows 11, Python 3.12, RTX 2080 Ti).
-# Install torch first from the CUDA index:
-#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
-# then:  pip install -r requirements.txt
-#   and: pip install --no-deps -e repos/StudioApprentice-perception
+# Installed by setup.ps1, which also installs PyTorch first (the CUDA build
+# for an NVIDIA GPU, else the CPU build) and, with a GPU, swaps the CPU
+# onnxruntime that rapidocr brings for onnxruntime-gpu[cuda,cudnn]==1.28.0.
+# Tested on Windows 11 with Python 3.12.
 
 rfdetr==1.8.3
 fastapi
@@ -11,12 +10,10 @@ openai
 mcp<2
 langchain-openai
 sceneprogllm @ git+https://github.com/KunalMGupta/sceneprogllm.git
+huggingface_hub
 mss
 pillow
 numpy
 requests
 opencv-python-headless
 rapidocr-onnxruntime==1.4.4
-# rapidocr pulls in CPU onnxruntime, which hides the GPU build: after this file,
-#   pip uninstall -y onnxruntime onnxruntime-gpu
-#   pip install "onnxruntime-gpu[cuda,cudnn]==1.28.0"

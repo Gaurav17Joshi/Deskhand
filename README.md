@@ -24,7 +24,7 @@ and tools:
 ```
 screenshot
   -> perception: L0/L1 detectors (RF-DETR), OCR (PP-OCR), icon matching
-                 run as three local servers on the GPU (scripts/stack.py)
+                 run as three local servers, on the GPU if there is one (scripts/stack.py)
   -> areas and region names: an OpenAI model (StudioApprentice's groups.py / view.py)
   -> tools: screen / focus / viewport / click / drag / scroll / type_text / key
             (studio's mcp_server, run in-process)
@@ -36,26 +36,35 @@ screenshot
 (Chrome with a throwaway profile), and input may only reach that process and
 its children. Clicks or keys aimed at any other window are refused.
 
-## Setup
+## Setup (any Windows 10/11 PC)
 
-Not in this repo, fetched separately:
-
-| path | what |
-|---|---|
-| `repos/StudioApprentice-perception` | StudioApprentice perception code |
-| `repos/studio` | StudioApprentice studio code (for `mcp_server/`) |
-| `weights/l0`, `weights/l1` | detector checkpoints with `registry_row.json` and `ddp_spec.json` |
-| `icon-library/` | icon library; `live` points at the version in use |
-| `models-ocr/en_PP-OCRv3_rec_infer.onnx` | English OCR model, from [RapidOCR](https://huggingface.co/SWHL/RapidOCR) |
+You need [Python 3.12](https://www.python.org/downloads/),
+[git](https://git-scm.com/download/win), an OpenAI API key and about 8 GB of disk
+(mostly PyTorch).
+An NVIDIA GPU is optional: without one, the screen reading runs on the CPU,
+several times slower. Then, in this folder:
 
 ```powershell
-python -m venv .venv
-.venv\Scripts\pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
-.venv\Scripts\pip install -r requirements.txt
-.venv\Scripts\pip install --no-deps -e repos\StudioApprentice-perception
+powershell -ExecutionPolicy Bypass -File setup.ps1
 ```
 
-Put `OPENAI_API_KEY=...` in `.env` (or set it in the environment).
+It creates `.venv` (PyTorch for your GPU, or the CPU build), installs the
+packages, clones StudioApprentice perception at the tested commit into
+`repos/`, downloads the models from
+[Gaurav17Joshi/deskhand-models](https://huggingface.co/Gaurav17Joshi/deskhand-models)
+(checking every file's checksum), asks for your OpenAI key (kept in `.env`,
+which git ignores), and checks that the models load. Run it again any time;
+it skips what is done. Then start Deskhand with **`Deskhand.cmd`**.
+
+Blender and Chrome are found wherever they are installed. To use a different
+copy, set `DESKHAND_BLENDER` or `DESKHAND_CHROME` to its `.exe`. Any display
+scaling and several monitors are fine. Remote Desktop works as long as the
+RDP window stays open: a minimised or disconnected session has no screen.
+
+What lives outside git: `weights/`, `icon-library/` and `models-ocr/` (from
+Hugging Face), `repos/` (from GitHub), `.venv/`, `runs/` and `.env`.
+`vendor/studio/` holds the three StudioApprentice studio files Deskhand uses
+(see `vendor/README.md`).
 
 ## Use
 

@@ -50,6 +50,16 @@ sys.path.insert(0, HERE)
 import cua_agent as A  # noqa: E402
 
 u32 = ctypes.WinDLL("user32", use_last_error=True)
+# Physical pixels everywhere, before any window exists: screenshots, the
+# agent's coordinates and this panel must agree on a display scaled to 125%,
+# 150% or more. Tk then sizes its fonts from the real DPI.
+try:
+    u32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))     # per-monitor v2
+except Exception:                                              # noqa: BLE001
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except Exception:                                          # noqa: BLE001
+        pass
 u32.SetWindowDisplayAffinity.argtypes = [wintypes.HWND, wintypes.DWORD]
 u32.GetWindowDisplayAffinity.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
 u32.GetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int]
@@ -168,11 +178,13 @@ class Overlays:
 
     def __init__(self, root, excluded):
         self.root = root
-        sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
+        # Around the whole virtual desktop, every monitor: the agent's
+        # screenshots cover all of them too.
+        vx, vy, vw, vh = (u32.GetSystemMetrics(i) for i in (76, 77, 78, 79))
         T = self.T
         self.frame = []
-        for g in (f"{sw}x{T}+0+0", f"{sw}x{T}+0+{sh - T}",
-                  f"{T}x{sh}+0+0", f"{T}x{sh}+{sw - T}+0"):
+        for g in (f"{vw}x{T}+{vx}+{vy}", f"{vw}x{T}+{vx}+{vy + vh - T}",
+                  f"{T}x{vh}+{vx}+{vy}", f"{T}x{vh}+{vx + vw - T}+{vy}"):
             w = tk.Toplevel(root, bg=YELLOW)
             w.overrideredirect(True)
             w.geometry(g)
@@ -290,9 +302,9 @@ class Router(threading.Thread):
                 self.user = (m.x, m.y)
             else:
                 cx, cy = cursor()
-                sw, sh = u32.GetSystemMetrics(0), u32.GetSystemMetrics(1)
-                self.user = (min(max(self.user[0] + m.x - cx, 0), sw - 1),
-                             min(max(self.user[1] + m.y - cy, 0), sh - 1))
+                vx, vy, vw, vh = (u32.GetSystemMetrics(i) for i in (76, 77, 78, 79))
+                self.user = (min(max(self.user[0] + m.x - cx, vx), vx + vw - 1),
+                             min(max(self.user[1] + m.y - cy, vy), vy + vh - 1))
             self.p.over.you_to(*self.user)
             if self.held:
                 self.p.relay.put(("move", None, self.user, 0))
@@ -449,8 +461,12 @@ class Panel:
         r.attributes("-topmost", True)
         r.attributes("-toolwindow", True)
         sw, sh = r.winfo_screenwidth(), r.winfo_screenheight()
-        W, H = 380, 580
-        r.geometry(f"{W}x{H}+{sw - W - 24}+{max(0, sh - H - 70)}")
+        try:
+            k = u32.GetDpiForSystem() / 96.0
+        except Exception:                                      # noqa: BLE001
+            k = 1.0
+        W, H = int(380 * k), int(580 * k)
+        r.geometry(f"{W}x{H}+{sw - W - int(24 * k)}+{max(0, sh - H - int(70 * k))}")
         r.protocol("WM_DELETE_WINDOW", self.quit)
         self._build()
         self.hwnd = hwnd_of(r)

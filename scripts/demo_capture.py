@@ -16,7 +16,8 @@ import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CUA = os.path.dirname(HERE)
-sys.path.insert(0, os.path.join(CUA, "repos", "studio"))
+sys.path.insert(0, HERE)
+import cua_agent  # noqa: E402,F401  (puts studio and perception on the path)
 from mcp_server.screen import grab  # noqa: E402
 
 URL = "http://127.0.0.1:8777"

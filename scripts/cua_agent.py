@@ -2,9 +2,10 @@
 
     eyes    StudioApprentice perception (repos/StudioApprentice-perception), its
             models served locally by scripts/stack.py
-    tools   studio's MCP server (repos/studio/mcp_server/serve_mcp.py) run
-            in-process: screen / focus / viewport / click / drag / scroll /
-            type_text / key, with real Windows input (act_win32)
+    tools   StudioApprentice studio's MCP server (mcp_server/serve_mcp.py, from
+            vendor/studio or repos/studio) run in-process: screen / focus /
+            viewport / click / drag / scroll / type_text / key, with real
+            Windows input (act_win32)
     brain   an OpenAI model through the Responses API, calling those tools
 
     .venv\\Scripts\\python scripts\\cua_agent.py "Add a UV sphere" --launch blender --close
@@ -35,7 +36,11 @@ for _s in (sys.stdout, sys.stderr):
     _s.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
 HERE = os.path.dirname(os.path.abspath(__file__))
 CUA = os.path.dirname(HERE)
-STUDIO = os.path.join(CUA, "repos", "studio")
+# studio's tools: a vendored copy (the public repo) or a full checkout.
+STUDIO = next((p for p in (os.path.join(CUA, "vendor", "studio"),
+                           os.path.join(CUA, "repos", "studio"))
+               if os.path.isdir(os.path.join(p, "mcp_server"))),
+              os.path.join(CUA, "vendor", "studio"))
 PERC = os.path.join(CUA, "repos", "StudioApprentice-perception")
 for p in (STUDIO, PERC):
     if p not in sys.path:
@@ -45,30 +50,35 @@ os.environ.setdefault("PERCEPTION_CONFIG", os.path.join(CUA, "perception.json"))
 # No see cards here, so the proxy L2 has to be asked for each region's areas;
 # without this the outline lists regions with nothing under them.
 os.environ.setdefault("PERC_GROUP_ASK", "1")
-# StudioApprentice's 6 s default is tuned for its GPU server's link to OpenAI; from here a big panel's
-# area call took longer, and a timed-out call leaves the region with no areas.
+# StudioApprentice's 6 s default is tuned for its GPU server's link to OpenAI;
+# from here a big panel's area call took longer, and a timed-out call leaves
+# the region with no areas.
 os.environ.setdefault("PERC_GROUP_TIMEOUT", "15")
 # act_win32 types by injecting Unicode characters (VK_PACKET), which Unreal's
 # Slate accepts and Blender ignores: on 2026-10-20 type_text("Box") left a
 # Blender rename field reading "Cube", while the same letters sent as key
 # presses renamed it. "vk" synthesises real keystrokes for each character.
 os.environ.setdefault("PERC_TYPE_MODE", "vk")
-# OPENAI_API_KEY from the environment, else from this file (KEY=value lines).
-ENV_FILE = os.environ.get("DESKHAND_ENV_FILE", os.path.join(CUA, ".env"))
+# OPENAI_API_KEY comes from the environment, else from the first of these
+# files that has it (KEY=value lines): $DESKHAND_ENV_FILE, then .env here.
+ENV_FILES = [f for f in (os.environ.get("DESKHAND_ENV_FILE"),
+                         os.path.join(CUA, ".env")) if f]
 
 
 def _load_key():
     if os.environ.get("OPENAI_API_KEY", "").strip():
         return
-    try:
-        for line in open(ENV_FILE, encoding="utf-8"):
-            k, _, v = line.strip().partition("=")
-            if k.strip() == "OPENAI_API_KEY" and v.strip():
-                os.environ["OPENAI_API_KEY"] = v.strip().strip('"').strip("'")
-                return
-    except OSError:
-        pass
-    raise SystemExit(f"no OPENAI_API_KEY in the environment or {ENV_FILE}")
+    for f in ENV_FILES:
+        try:
+            for line in open(f, encoding="utf-8"):
+                k, _, v = line.strip().partition("=")
+                if k.strip() == "OPENAI_API_KEY" and v.strip():
+                    os.environ["OPENAI_API_KEY"] = v.strip().strip('"').strip("'")
+                    return
+        except OSError:
+            pass
+    raise SystemExit("no OPENAI_API_KEY: set it in the environment, or put "
+                     f"OPENAI_API_KEY=... in {os.path.join(CUA, '.env')}")
 
 
 # ------------------------------------------------------------------ keys
@@ -336,8 +346,48 @@ class Guard:
 
 # --------------------------------------------------------------- blender
 
-BLENDER = os.environ.get(
-    "DESKHAND_BLENDER", r"C:\Program Files\Blender Foundation\Blender 5.2\blender.exe")
+def _find_blender():
+    """$DESKHAND_BLENDER, else the newest Blender under Program Files, else PATH."""
+    if os.environ.get("DESKHAND_BLENDER"):
+        return os.environ["DESKHAND_BLENDER"]
+    import glob
+    import shutil
+    found = []
+    for root in {os.environ.get("ProgramFiles", r"C:\Program Files"),
+                 os.environ.get("ProgramW6432", "")}:
+        if root:
+            found += glob.glob(os.path.join(root, "Blender Foundation", "Blender *",
+                                            "blender.exe"))
+
+    def version(p):
+        m = re.search(r"Blender (\d+)\.(\d+)", p)
+        return tuple(int(x) for x in m.groups()) if m else (0, 0)
+    return max(found, key=version) if found else (shutil.which("blender") or "")
+
+
+def _find_chrome():
+    """$DESKHAND_CHROME, else the usual install places, else the registry."""
+    if os.environ.get("DESKHAND_CHROME"):
+        return os.environ["DESKHAND_CHROME"]
+    for v in ("ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"):
+        p = os.path.join(os.environ.get(v, ""), r"Google\Chrome\Application\chrome.exe")
+        if os.environ.get(v) and os.path.isfile(p):
+            return p
+    import shutil
+    import winreg
+    for hive in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+        try:
+            with winreg.OpenKey(hive, r"SOFTWARE\Microsoft\Windows\CurrentVersion"
+                                      r"\App Paths\chrome.exe") as k:
+                p = winreg.QueryValue(k, None)
+                if p and os.path.isfile(p):
+                    return p
+        except OSError:
+            pass
+    return shutil.which("chrome") or ""
+
+
+BLENDER = _find_blender()
 _WNDENUM = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
 
 
@@ -379,8 +429,7 @@ def focus_window(hwnd):
     return _u32.GetForegroundWindow() == hwnd
 
 
-CHROME = os.environ.get(
-    "DESKHAND_CHROME", r"C:\Program Files\Google\Chrome\Application\chrome.exe")
+CHROME = _find_chrome()
 
 BLENDER_NOTES = """\
 Keys go to whatever is under the mouse pointer in Blender. To aim a shortcut,
@@ -430,6 +479,9 @@ def launch(kind, timeout=90):
     """A fresh window of our own: its pid is the only one the guard allows."""
     import subprocess
     app = APPS[kind]
+    if not app["exe"] or not os.path.isfile(app["exe"]):
+        raise SystemExit(f"{app['name']} was not found on this PC. Install it, or set "
+                         f"DESKHAND_{kind.upper()} to its .exe")
     p = subprocess.Popen([app["exe"], *app["args"]], cwd=os.path.dirname(app["exe"]))
     end = time.time() + timeout
     while time.time() < end:
