@@ -9,7 +9,7 @@ skips what is already done.
 
 Options:
     -ModelsRepo OWNER/NAME   Hugging Face repo with the models (default
-                             $env:DESKHAND_MODELS_REPO or Gaurav17Joshi/deskhand-models)
+                             $env:DESKHAND_MODELS_REPO or GauravJ17/deskhand-models)
     -ModelsFrom DIR          copy the models from a local folder instead
     -Cpu                     use the CPU build even if there is an NVIDIA GPU
 #>
@@ -26,7 +26,7 @@ Set-Location $PSScriptRoot
 $PerceptionRepo = "https://github.com/KunalMGupta/StudioApprentice-perception"
 $PerceptionCommit = "e6d32b028a4ab5b311ccc20bf2ea6ebb6d2f3914"
 if (-not $ModelsRepo) {
-    $ModelsRepo = if ($env:DESKHAND_MODELS_REPO) { $env:DESKHAND_MODELS_REPO } else { "Gaurav17Joshi/deskhand-models" }
+    $ModelsRepo = if ($env:DESKHAND_MODELS_REPO) { $env:DESKHAND_MODELS_REPO } else { "GauravJ17/deskhand-models" }
 }
 
 function Step($m) { Write-Host "`n== $m" -ForegroundColor Cyan }

@@ -112,7 +112,7 @@ def stage():
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--repo", default=os.environ.get("DESKHAND_MODELS_REPO",
-                                                     "Gaurav17Joshi/deskhand-models"))
+                                                     "GauravJ17/deskhand-models"))
     ap.add_argument("--private", action="store_true")
     ap.add_argument("--stage-only", action="store_true")
     a = ap.parse_args()

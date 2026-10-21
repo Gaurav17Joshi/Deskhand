@@ -3,7 +3,7 @@
     .venv\\Scripts\\python scripts\\fetch_models.py [--repo OWNER/NAME] [--from-dir DIR]
 
 From the Hugging Face model repo ($DESKHAND_MODELS_REPO, default
-Gaurav17Joshi/deskhand-models), laid out as publish_models.py writes it:
+GauravJ17/deskhand-models), laid out as publish_models.py writes it:
 
     weights/l0/, weights/l1/   checkpoint_best_ema.pth, registry_row.json, ddp_spec.json
     icon-library/<version>/    the icon library
@@ -26,7 +26,7 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-DEFAULT_REPO = os.environ.get("DESKHAND_MODELS_REPO", "Gaurav17Joshi/deskhand-models")
+DEFAULT_REPO = os.environ.get("DESKHAND_MODELS_REPO", "GauravJ17/deskhand-models")
 OCR_REPO, OCR_FILE = "SWHL/RapidOCR", "PP-OCRv3/en_PP-OCRv3_rec_infer.onnx"
 
 

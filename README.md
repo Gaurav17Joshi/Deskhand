@@ -51,7 +51,7 @@ powershell -ExecutionPolicy Bypass -File setup.ps1
 It creates `.venv` (PyTorch for your GPU, or the CPU build), installs the
 packages, clones StudioApprentice perception at the tested commit into
 `repos/`, downloads the models from
-[Gaurav17Joshi/deskhand-models](https://huggingface.co/Gaurav17Joshi/deskhand-models)
+[GauravJ17/deskhand-models](https://huggingface.co/GauravJ17/deskhand-models)
 (checking every file's checksum), asks for your OpenAI key (kept in `.env`,
 which git ignores), and checks that the models load. Run it again any time;
 it skips what is done. Then start Deskhand with **`Deskhand.cmd`**.
